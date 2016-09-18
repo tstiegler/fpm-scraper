@@ -1,5 +1,6 @@
 /**
- * FastPokeMap API scraper.
+ * FastPokeMap API scraper. by Thomas Stiegler
+ * http://thomasstiegler.com
  */
  
 // Spawns last for 15 minutes so theres not much point in making it less than this.
