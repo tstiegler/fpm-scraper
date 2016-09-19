@@ -1,0 +1,15 @@
+{
+    "name": "fpm-scraper",
+    "version": "0.0.1",
+    "description": "Scrape spawns from FastPokeMap - Get email notifications.",
+    "author": "Thomas Stiegler <stiegler.t@gmail.com>",
+    "scripts": {
+        "start": "node main.js"
+    },
+    "dependencies": {
+        "nodemailer": "latest",
+        "request": "latest"
+    },
+    "license": "MIT",
+	"repository": https://github.com/tstiegler/fpm-scraper"
+}
