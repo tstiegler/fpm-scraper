@@ -1,6 +1,9 @@
 /**
  * FastPokeMap API scraper. by Thomas Stiegler
  * http://thomasstiegler.com
+ *
+ * Edit the stuff below, make sure the CURL executable is accessible from the
+ * working directory.
  */
  
 // Spawns last for 15 minutes so theres not much point in making it less than this.
