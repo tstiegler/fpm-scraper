@@ -5,64 +5,27 @@
  * Edit the stuff below, make sure the CURL executable is accessible from the
  * working directory.
  */
- 
-// Spawns last for 15 minutes so theres not much point in making it less than this.
-var timeBetweenChecks = 15 * 60 * 1000; 
 
-// Cutoff for hitting the API, don't bother hitting it forever.
-var maxTries = 200; 
-
-// Send out all spawn data to an external server. 
-// Set to blank to not use this feature.
-var spawnCollectionEndpoint = "http://example.com/spawn.php"; 
-
-// List of PokemonIds to notify for.
-var pokemonIdsToNotify = [
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 23,
-    24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
-    34, 35, 36, 37, 38, 39, 40, 50, 51, 52, 
-    53, 56, 57, 58, 59, 63, 64, 65, 66, 67, 
-    68, 72, 73, 74, 75, 76, 77, 78, 81, 82, 
-    83, 84, 85, 86, 87, 88, 89, 95, 100, 101, 
-    104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
-    114, 115, 122, 123, 125, 126, 127, 130, 131, 132, 
-    137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 
-    147, 148, 149, 150, 151
-];
-
-// Email notification configuration.
-var notifyConfig = {
-    connectionString: 'smtps://example%40example.com:password@smtp.zoho.com:465',
-    sendTo: "gimmespawnsnowplzthx@gmail.com",
-    sendFrom: '"Your neighbourhood friendly Pokemon." <pokemon@example.com>'
+// Includes for the notifiers we want to use.
+var moduleReferences = {
+    "locators": {
+        gpsJsonLocator: require("./locator.gpsjson.js"),
+        staticLocator: require("./locator.static.js")
+    },
+    "notifiers": {
+        emailNotifier: require("./notifier.email.js")
+    },
+    "senders": {
+        httpPostSender: require("./sender.httppost.js")
+    },
+    "receivers": {
+        fpmReceiver: require("./receiver.fpm.js")
+    }
 };
 
-// Array of points to check spawns at.
-var pointChecks = [
-    {
-        gpsjson: {host: 'example.com', path: '/gps.json'}, 
-        notifyProfile: pokemonIdsToNotify,
-        notifyAt: notifyConfig,
-        notify: true,
-		maxDistance: 200
-    },
-    {
-        lat: 34.0093515,
-        lng: -118.49746820000001,
-        notify: false
-    }
-];
-
-// ---- NO NEED EDIT BEYOND THIS POINT ----
-
-require("./synq.js");
-require("./pokeTable.js");
-
-var nodemailer = require('nodemailer');
-var request = require('request');
-var fs = require('fs');
-var spawn = require('child_process').spawn;
-var http = require('http');
+var config = require("./config.js");
+var synq = require("./lib/synq.js");
+var encounters = {};
 
 // Kick everything off.
 checkService();
@@ -75,22 +38,42 @@ function checkService() {
     var chkTime = getTimestamp();
 
     checkAllPoints(function() {
-        var sleepTime = 15 * 60 * 1000;
+        cleanSpawnHistory();
 
         try {
             chkTime = getTimestamp() - chkTime;
             console.log("Process took " + chkTime + " milliseconds");
 
-            sleepTime = timeBetweenChecks - chkTime;
+            var sleepTime = config.timeBetweenChecks - chkTime;
             if (sleepTime < 0) sleepTime = 0;
 
             console.log("Waiting " + (sleepTime / 1000 / 60).toFixed(2) + " minutes...");
+
+            setTimeout(checkService, sleepTime);
         } catch(err) {
             console.log("Error in check service!");
-        }
-
-        setTimeout(checkService, sleepTime);
+            setTimeout(checkService, config.timeBetweenChecks);
+        }        
     });
+}
+
+
+/**
+ * Remove all old spawns from the spawn history.
+ */
+function cleanSpawnHistory() {
+    var currentTime = getTimestamp();
+    console.log("Cleaning old encounters (current time: " + currentTime + ")");
+
+    for(var i in encounters) {
+        if(encounters.hasOwnProperty(i)) {
+            var timeSinceSeen = currentTime - encounters[i]['timestamp'];
+            if (timeSinceSeen > (1000 * 60 * 60)) {
+                delete encounters[i];
+                console.log("Removed " + i + " (" + timeSinceSeen + " ms old)");                
+            }    
+        }
+    }
 }
 
 
@@ -104,111 +87,79 @@ function getTimestamp() {
 
 
 /**
+ * Build the config with module instances.
+ */
+function buildConfig() {
+    var result = [];
+
+    for(var i in config.pointChecks) {
+        if(!config.pointChecks.hasOwnProperty(i))
+            continue;
+
+        var cfg = config.pointChecks[i];
+
+        var cfgEntry = {};
+
+        if("notifyOnPokemonIds" in cfg)
+            cfgEntry.notifyOnPokemonIds = cfg.notifyOnPokemonIds;
+
+        if("maxDistance" in cfg)
+            cfgEntry.maxDistance = cfg.maxDistance;
+
+        if("locator" in cfg)
+            cfgEntry.locator = moduleReferences.locators[cfg.locator.module](cfg.locator.config);
+        
+        if("notifier" in cfg)
+            cfgEntry.notifier = moduleReferences.notifiers[cfg.notifier.module](cfg.notifier.config);
+    
+        if("spawnSender" in cfg)
+            cfgEntry.spawnSender = moduleReferences.senders[cfg.spawnSender.module](cfg.spawnSender.config);
+
+        if("receiver" in cfg)
+            cfgEntry.receiver = moduleReferences.receivers[cfg.receiver.module](cfg.receiver.config);
+
+        result.push(cfgEntry);
+    }
+
+    return result;
+}
+
+
+/**
  * Run through all checks.
  */
 function checkAllPoints(callback) {
+    var currentConfig = buildConfig();
+
     // Iterate over all point checks.
     var iteration = synq();
-    for(var i in pointChecks) {
+    for(var i in currentConfig) {
         (function(pnt) {
-            // Create a step check.
             iteration.step(function(msg, next) {
                 try {
-                    if("gpsjson" in pnt) {
-                        downloadToString(pnt.gpsjson, function(gpsData) {                        
-                            gpsData = JSON.parse(gpsData);
-                            gpsData.lat = parseFloat(gpsData.lat);
-                            gpsData.lng = parseFloat(gpsData.lng);
-                            console.log("Downloaded GPS data: ", gpsData);
-
-                            // Extend original point data.
-                            pnt.lat = gpsData.lat;
-                            pnt.lng = gpsData.lng;               
-
-                            // Grab spawns near the point and pass them off to a handler.
-                            fetch(gpsData.lat, gpsData.lng, function(content, tries) {
-                                console.log("Took " + tries + " tries.");
-                                handleResults(content.result, pnt, tries);                
-                                next();
-                            });
-                        });                    
-                    } else {
-                        console.log("Starting check for spawns @ " + pnt.lat + "," + pnt.lng);
+                    pnt.locator.getLocation(function(location) {
+                        // Inject location back into the point (used in distance calculations).
+                        pnt.location = location;
 
                         // Grab spawns near the point and pass them off to a handler.
-                        fetch(pnt.lat, pnt.lng, function(content, tries) {
+                        pnt.receiver.fetch(location.lat, location.lng, function(content, tries) {
                             console.log("Took " + tries + " tries.");
-                            handleResults(content.result, pnt, tries);                
+                            handleResults(content, pnt, tries);                
                             next();
-                        });
-                    }
+                        }, function(err) { throw {message: "Error while fetching spawns.", error: err}; });
+                    }, function(err) { throw {message: "Error while getting location.", error: err} });
                 } catch(err) {
                     console.log("Error in synq step!");
+                    console.log(err)
                     next();
                 }
             });
-        })(pointChecks[i]);
+        })(currentConfig[i]);
     }
     iteration.step(function(msg, next) {
         console.log("finished.");
         callback();
     });
-}
-
-
-/**
- * Send notification email.
- */
-function sendNotification(notifications, pnt, info) {
-    var subjectSpawns = "";
-    var textSpawns = "";
-
-    try {
-        for(var i in notifications) {
-            var noti = notifications[i];
-            var expiryDate = new Date(parseInt(noti['expiration_timestamp_ms'], 10));
-
-            subjectSpawns += noti["pokemon_id"] + " ";
-            textSpawns += noti["pokemon_id"] + " @ http://maps.google.com/maps?z=12&t=m&q=loc:" + noti['latitude'] + '+' + noti['longitude'] + '\r\n' + 'Expires @ ' + formatDate(expiryDate) + '\r\n\r\n'; 
-        }
-        subjectSpawns = subjectSpawns.substr(0, subjectSpawns.length - 1);
-
-        // create reusable transporter object using the default SMTP transport
-        var transporter = nodemailer.createTransport(pnt.notifyAt.connectionString);
-
-        // setup e-mail data,
-        var mailOptions = {
-            from: pnt.notifyAt.sendFrom, // sender address
-            to: pnt.notifyAt.sendTo, // list of receivers
-            subject: 'Spawns (' + subjectSpawns + ')', // Subject line
-            text: textSpawns
-        };
-
-        // send mail with defined transport object
-        transporter.sendMail(mailOptions, function(error, info){
-            if(error){
-                return console.log(error);
-            }
-            console.log('Message sent: ' + info.response);
-        });
-    } catch(err) {
-        console.log("Error in notification sending!");
-    }
-}
-
-
-/**
- * Ripped date fotmatting.
- */
-function formatDate(date) {
-    var hours = date.getHours();
-    var minutes = date.getMinutes();
-    var ampm = hours >= 12 ? 'pm' : 'am';
-    hours = hours % 12;
-    hours = hours ? hours : 12; // the hour '0' should be '12'
-    minutes = minutes < 10 ? '0'+minutes : minutes;
-    var strTime = hours + ':' + minutes + ' ' + ampm;
-    return date.getMonth()+1 + "/" + date.getDate() + "/" + date.getFullYear() + "  " + strTime;
 }
 
 
@@ -220,159 +171,68 @@ function handleResults(spawns, pnt, tries) {
 
     for(var i in spawns) {
         var spawn = spawns[i];
-        var id = nameToId(spawn['pokemon_id'].toLowerCase());
-        var expiryDate = new Date(parseInt(spawn['expiration_timestamp_ms'], 10));
-        var distanceFromPoke = distance(spawn['latitude'], spawn['longitude'], pnt.lat, pnt.lng);
 
-        console.log(spawn['pokemon_id'] + "(" +  id + "): " + distanceFromPoke.toFixed(2) + "m away,  Expiring at: " + formatDate(expiryDate)) + ".";        
-        spawn['id'] = id;
+        var expiryDate = new Date(spawn.expiration);
+        var distanceFromPoke = distance(spawn.lat, spawn.lng, pnt.location.lat, pnt.location.lng);
+        spawn['distance'] = distanceFromPoke.toFixed(2) + "m away";        
 
-        var notify = false;
+        // Check if we have information about this encounter.
+        if(!(spawn.encounterId in encounters)) {
+            // Save spawn info.
+            encounters[spawn.encoutnerId] = {
+                spawninfo: spawn,
+                timestamp: getTimestamp()
+            };
 
-        // Check if this pokemon is one we want, notify.
-        for(var j in pnt.notifyProfile) {
-            var notifyId = pnt.notifyProfile[j];
-            if(notifyId == id)
-                notify = true;      
-        }
+            console.log("[" + spawn.encounterId + "] " + spawn.name + "(" +  spawn.id + "): " + distanceFromPoke.toFixed(2) + "m away,  Expiring at: " + formatDate(expiryDate) + ".");        
 
-        // If it is one we want, but it is outside of max distance, don't notify.
-        if("maxDistance" in pnt && notify && distanceFromPoke > pnt.maxDistance)
-            notify = false; 
-        
-        if(notify)
-            notifications.push(spawn);        
-    }
+            // Check if we even have IDs to check against.
+            if("notifyOnPokemonIds" in pnt) {
+                var notify = false;
 
-    sendSpawns(spawns);
+                // Check if this pokemon is one we want, notify.
+                for(var j in pnt.notifyOnPokemonIds) {
+                    var notifyId = pnt.notifyOnPokemonIds[j];
+                    if(notifyId == spawn.id)
+                        notify = true;      
+                }
 
-    if(notifications.length > 0 && pnt.notify)
-        sendNotification(notifications, pnt, {tries: tries});    
-}
-
-
-/**
- * Send spawn data to a server.
- */
-function sendSpawns(spawns) {
-	if(spawnCollectionEndpoint == "")
-		return;
-
-    console.log("Sending spawns to spawn collector.");
-	
-    request.post(
-        spawnCollectionEndpoint,
-        { form: {spawns: JSON.stringify(spawns)} },
-        function (error, response, body) {
-            if (!error && response.statusCode == 200) {
-                console.log("Spend spawn: " + body)
-            } else {
-                console.log("Send spawn error!");
+                // If it is one we want, but it is outside of max distance, don't notify.
+                if("maxDistance" in pnt && notify && distanceFromPoke > pnt.maxDistance)
+                    notify = false; 
+                
+                if(notify)
+                    notifications.push(spawn);
             }
-        }
-    );
-}
-
-
-/**
- * Convert pokemon name to ID.
- */
-function nameToId(name) {
-    for(var i in pokeTable) {
-        if(i != "0" && pokeTable.hasOwnProperty(i)) {
-            if(pokeTable[i].name.toLowerCase() == name)
-                return pokeTable[i].id;
+        } else {
+            console.log("[" + spawn.encounterId + "] " + spawn.name + "(" +  spawn.id + "): " + distanceFromPoke.toFixed(2) + "m away,  Expiring at: " + formatDate(expiryDate) + ". (OLD SPAWN)"); 
         }
     }
 
-    return -1;
+    // Sent spawns to external server.
+    if("spawnSender" in pnt && pnt.spawnSender != null)
+        pnt.spawnSender.sendSpawns(spawns, pnt);
+
+    // Send notifications if we have some.
+    if(notifications.length > 0 && "notifier" in pnt && pnt.notifier != null)
+        pnt.notifier.sendNotification(notifications, pnt, {tries: tries});    
 }
 
 
-/**
- * Attempt a single spawn point fetch by hitting the fastpokemap API.
- */
-function attemptFetch(lat, lng, callback) {
-	try {
-		fs.unlinkSync("output.json");
-	} catch(err) {
-		console.log("Couldn't delete output.json");
-	}
-
-    var prc = spawn('curl', [
-        '--insecure',
-        'https://api.fastpokemap.se/?key=allow-all&ts=0&lat=' + lat + '&lng=' + lng,  
-        '-H', 'pragma: no-cache',  
-        '-H', 'origin: https://fastpokemap.se', 
-        '-H', 'accept-encoding: gzip, deflate, sdch, br', 
-        '-H', 'accept-language: en-US,en;q=0.8', 
-        '-H', 'user-agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116 Safari/537.36', 
-        '-H', 'accept: application/json, text/javascript, */*; q=0.01', 
-        '-H', 'cache-control: no-cache', 
-        '-H', 'authority: api.fastpokemap.se', 
-        '--compressed',  
-        '-o', 'output.json'
-    ]);
-
-    prc.on('close', function (code) { 
-        try {       
-            var contents = fs.readFileSync('output.json').toString();
-        } catch(err) {
-             callback({ error: err });
-        }
-
-        try {                        
-            callback(JSON.parse(contents));
-        } catch(err) {
-            callback({ error: err, originalContents: contents });
-        }
-    });
-}
-
 
 /**
- * Fetch spawn points at a given location by repeatedly attempting calls to the API.
+ * Date fotmatting, ripped from somewhere.
  */
-function fetch(lat, lng, callback, tries) {
-    tries = tries || 1;
-
-    if(tries > maxTries) {
-        console.log("Took too long D:");
-        return;
-    }        
-
-    attemptFetch(lat, lng, function(contents) {
-        if("error" in contents && contents.error === "overload") {
-            console.log("Overloaded, waiting (" + tries + " " + ((tries == 1) ? "try" : "tries") + ")...");
-            setTimeout(function() { fetch(lat, lng, callback, tries + 1); }, 0);
-        } else if("error" in contents) {
-            console.log("Unexpected error!");
-            console.log(contents);
-            setTimeout(function() { fetch(lat, lng, callback, tries + 1); }, 0);
-        } else {
-            callback(contents, tries);
-        }            
-    });
-}
-
-
-/**
- * Download web request to string.
- */
-function downloadToString(options, callback) {
-    var req = http.request(options, function (response) {
-        var str = ''
-        response.on('data', function (chunk) {
-            str += chunk;
-        });
-
-        response.on('end', function () {
-            callback(str);
-        });
-    });
-
-    req.end();
-} 
+function formatDate(date) {
+    var hours = date.getHours();
+    var minutes = date.getMinutes();
+    var ampm = hours >= 12 ? 'pm' : 'am';
+    hours = hours % 12;
+    hours = hours ? hours : 12; // the hour '0' should be '12'
+    minutes = minutes < 10 ? '0'+minutes : minutes;
+    var strTime = hours + ':' + minutes + ' ' + ampm;
+    return date.getMonth()+1 + "/" + date.getDate() + "/" + date.getFullYear() + "  " + strTime;
+}  
 
 
 /**
