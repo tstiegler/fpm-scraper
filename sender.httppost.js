@@ -8,7 +8,7 @@ var httpPostSender = function(config) {
      * Send spawn data to a server.
      */
     function sendSpawns(spawns, pnt) {
-        console.log("Sending spawns to spawn collector.");
+        console.log("Sending " + spawns.length + " spawn(s) to spawn collector.");
         
         var formData = {spawns: JSON.stringify(spawns)};
 

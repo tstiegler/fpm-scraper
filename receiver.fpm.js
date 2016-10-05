@@ -3,8 +3,25 @@ var fpmReceiver = function(config) {
     var spawn = require('child_process').spawn;
     var pokeTable = require("./lib/pokeTable.js");
     var fs = require('fs');
+    var secretReversed = require("./fpmSecret.js")(config.fingerprint);
 
     config.maxTries = config.maxTries || 200;
+
+    // Attempt the security authorize
+    var prcSec = spawn('curl', [
+        '--insecure',
+        'https://fastpokemap.se/sec?authorize=' + Math.random() + '.fpmSecretToken',  
+        '-H', "pragma: no-cache",
+        '-H', "accept-encoding: gzip, deflate, sdch, br",
+        '-H', "x-requested-with: XMLHttpRequest" ,
+        '-H', "accept-language: en-US,en;q=0.8" ,
+        '-H', "user-agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.116 Safari/537.36",
+        '-H', "accept: */*", 
+        '-H', "cache-control: no-cache", 
+        '-H', "authority: fastpokemap.se", 
+        '-H', "referer: https://fastpokemap.se/", 
+        '--compressed'        
+    ]);    
 
     /**
      * Attempt a single spawn point fetch by hitting the fastpokemap API.
@@ -16,9 +33,12 @@ var fpmReceiver = function(config) {
             console.log("Couldn't delete output.json");
         }
 
+        var url = secretReversed.generateKeyCheck('https://api.fastpokemap.se/?&lat=' + lat + '&lng=' + lng);
+        console.log("Using URL:", url);
+
         var prc = spawn('curl', [
             '--insecure',
-            'https://api.fastpokemap.se/?key=allow-all&ts=0&lat=' + lat + '&lng=' + lng,  
+            url,  
             '-H', 'pragma: no-cache',  
             '-H', 'origin: https://fastpokemap.se', 
             '-H', 'accept-encoding: gzip, deflate, sdch, br', 
@@ -31,7 +51,8 @@ var fpmReceiver = function(config) {
             '-o', 'output.json'
         ]);
 
-        prc.on('close', function (code) { 
+        prc.on('close', function (code) {
+            prc.stdout.resume(); 
             var contents = "";
 
             try {       
@@ -119,7 +140,6 @@ var fpmReceiver = function(config) {
 
         return -1;
     }
-
 
     // Return module object.
     return {

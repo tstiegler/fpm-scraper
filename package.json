@@ -8,8 +8,9 @@
     },
     "dependencies": {
         "nodemailer": "latest",
-        "request": "latest"
+        "request": "latest",
+        "pushover-notifications": "latest"
     },
     "license": "MIT",
-	"repository": https://github.com/tstiegler/fpm-scraper"
+	"repository": "https://github.com/tstiegler/fpm-scraper"
 }

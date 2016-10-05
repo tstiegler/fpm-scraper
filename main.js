@@ -13,7 +13,8 @@ var moduleReferences = {
         staticLocator: require("./locator.static.js")
     },
     "notifiers": {
-        emailNotifier: require("./notifier.email.js")
+        emailNotifier: require("./notifier.email.js"),
+        pushoverNotifier: require("./notifier.pushover.js")
     },
     "senders": {
         httpPostSender: require("./sender.httppost.js")
@@ -34,8 +35,12 @@ checkService();
 /**
  * Iterate the map checks over and over.
  */
-function checkService() {
+function checkService(iterations) {
+    iterations = iterations || 0;
     var chkTime = getTimestamp();
+
+    if(iterations == 60)
+        return;
 
     checkAllPoints(function() {
         cleanSpawnHistory();
@@ -49,10 +54,10 @@ function checkService() {
 
             console.log("Waiting " + (sleepTime / 1000 / 60).toFixed(2) + " minutes...");
 
-            setTimeout(checkService, sleepTime);
+            setTimeout(function() { checkService(iterations + 1); }, sleepTime);
         } catch(err) {
             console.log("Error in check service!");
-            setTimeout(checkService, config.timeBetweenChecks);
+            setTimeout(function() { checkService(iterations + 1); }, config.timeBetweenChecks);
         }        
     });
 }
@@ -136,23 +141,23 @@ function checkAllPoints(callback) {
     for(var i in currentConfig) {
         (function(pnt) {
             iteration.step(function(msg, next) {
-                try {
-                    pnt.locator.getLocation(function(location) {
-                        // Inject location back into the point (used in distance calculations).
-                        pnt.location = location;
+                pnt.locator.getLocation(function(location) {
+                    // Inject location back into the point (used in distance calculations).
+                    pnt.location = location;
 
-                        // Grab spawns near the point and pass them off to a handler.
-                        pnt.receiver.fetch(location.lat, location.lng, function(content, tries) {
-                            console.log("Took " + tries + " tries.");
-                            handleResults(content, pnt, tries);                
-                            next();
-                        }, function(err) { throw {message: "Error while fetching spawns.", error: err}; });
-                    }, function(err) { throw {message: "Error while getting location.", error: err} });
-                } catch(err) {
-                    console.log("Error in synq step!");
-                    console.log(err)
+                    // Grab spawns near the point and pass them off to a handler.
+                    pnt.receiver.fetch(location.lat, location.lng, function(content, tries) {
+                        console.log("Took " + tries + " tries.");
+                        handleResults(content, pnt, tries);                
+                        next();
+                    }, function(err) { 
+                        console.log("Error while fetching spawns.", err);
+                        next();
+                    });
+                }, function(err) { 
+                    console.log("Error while getting location.", err);
                     next();
-                }
+                });
             });
         })(currentConfig[i]);
     }
@@ -168,6 +173,7 @@ function checkAllPoints(callback) {
  */
 function handleResults(spawns, pnt, tries) {
     var notifications = [];
+    var newSpawns = [];
 
     for(var i in spawns) {
         var spawn = spawns[i];
@@ -179,10 +185,11 @@ function handleResults(spawns, pnt, tries) {
         // Check if we have information about this encounter.
         if(!(spawn.encounterId in encounters)) {
             // Save spawn info.
-            encounters[spawn.encoutnerId] = {
+            encounters[spawn.encounterId] = {
                 spawninfo: spawn,
                 timestamp: getTimestamp()
             };
+            newSpawns.push(spawn);
 
             console.log("[" + spawn.encounterId + "] " + spawn.name + "(" +  spawn.id + "): " + distanceFromPoke.toFixed(2) + "m away,  Expiring at: " + formatDate(expiryDate) + ".");        
 
@@ -210,8 +217,8 @@ function handleResults(spawns, pnt, tries) {
     }
 
     // Sent spawns to external server.
-    if("spawnSender" in pnt && pnt.spawnSender != null)
-        pnt.spawnSender.sendSpawns(spawns, pnt);
+    if("spawnSender" in pnt && pnt.spawnSender != null && newSpawns.length > 0)
+        pnt.spawnSender.sendSpawns(newSpawns, pnt);
 
     // Send notifications if we have some.
     if(notifications.length > 0 && "notifier" in pnt && pnt.notifier != null)
