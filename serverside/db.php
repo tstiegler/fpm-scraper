@@ -3,7 +3,10 @@
 // Database configuration.
 $dbName = "";
 $dbUser = "";
-$dbPass = "":
+$dbPass = "";
+
+// Google maps API key.
+$GLOBALS['gmapsKey'] = "<INSERT GOOGLE MAPS KEY HERE>";
 
 // Attempt a connection to our database.
 try {
