@@ -1,6 +1,7 @@
 var gpsJsonLocator = function(gpsUrl) {
 
     var http = require('http');
+    var https = require('https');
 
     /**
      * Get GPS location from URL.
@@ -30,7 +31,10 @@ var gpsJsonLocator = function(gpsUrl) {
      */
     function downloadToString(options, callback, error) {
         try {
-            var req = http.request(options, function (response) {
+            var useHttps = ("https" in options) ? options.https : false;
+            var requester = useHttps ? https : http;
+
+            var req = requester.request(options, function (response) {
                 var str = ''
                 response.on('data', function (chunk) {
                     str += chunk;

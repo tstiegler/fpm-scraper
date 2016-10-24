@@ -39,8 +39,9 @@ function checkService(iterations) {
     iterations = iterations || 0;
     var chkTime = getTimestamp();
 
-    if(iterations == 60)
-        return;
+    // The cURL kill fix has removed the need for this:
+    // if(iterations == 60)
+    //     return;
 
     checkAllPoints(function() {
         cleanSpawnHistory();

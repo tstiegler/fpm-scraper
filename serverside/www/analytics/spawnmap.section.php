@@ -17,6 +17,8 @@
             height: 100%;
             margin: 0;
             padding: 0;
+
+            overflow: hidden;
         }
         #map {
             position: absolute;
@@ -30,6 +32,7 @@
         }
         nav { z-index: 2; position: absolute; top: 0; left 0; width: 100%;}
         #dist { z-index: 3; position: absolute; bottom: 0; left: 0; width: 100%; background-color: #fff; }
+        #tracker { z-index: 3; position: absolute; bottom: 0; left: 0; width: 100%; text-align: right;}
         #controls { z-index: 3; position: absolute; top: 80px; left 0; width: 100%; }
     </style>
 
@@ -41,14 +44,29 @@
     <div id="controls">
         <div class="switch">
             <label>
-            Use GPS JSON:
+            Show only nearby spawns:
             <input type="checkbox" id="gpsjson" hecked="checked">
             <span class="lever"></span>
             </label>
         </div> 
+        <div class="switch">
+            <label>
+            Use GPS location:
+            <input type="checkbox" id="usegps" hecked="checked">
+            <span class="lever"></span>
+            </label>
+        </div> 		
+        <div class="switch">
+            <label>
+            Pin to GPS location:
+            <input type="checkbox" id="pingps" hecked="checked">
+            <span class="lever"></span>
+            </label>
+        </div> 		
     </div>
 
     <div id="dist"></div>
+    <div id="tracker"><a href="#!" class="btn btn-small" onclick="nearby();">Nearby</a> <a href="#!" onclick="gone();" class="btn btn-small">Gone</a> <a href="#!" onclick="reset();" class="btn btn-small">Reset</a></div>
 
     <script>
 /**
@@ -73,6 +91,47 @@ function distance(lat1, lon1, lat2, lon2) {
     return d * 1000;
 }
 
+var map;
+
+var circles = [];
+var locationCircle = null;
+var currentGps;
+var pinGps = true;
+var useGps = true;
+
+function nearby() {    
+    circles.push(new google.maps.Circle({
+        strokeColor: '#00FF00',
+        strokeOpacity: 0.8,
+        strokeWeight: 2,
+        fillColor: '#00FF00',
+        fillOpacity: 0.35,
+        map: map,
+        center: currentGps,
+        radius: 200
+    }));
+}
+
+function gone() {
+     circles.push(new google.maps.Circle({
+        strokeColor: '#FF0000',
+        strokeOpacity: 0.8,
+        strokeWeight: 2,
+        fillColor: '#FF0000',
+        fillOpacity: 0.35,
+        map: map,
+        center: currentGps,
+        radius: 200
+    }));   
+}
+
+function reset() {
+    for(var i in circles) {
+        circles[i].setMap(null);
+    }
+    circles = [];
+}
+
 function initMap() {
 
     var maxDistance = 200;
@@ -94,7 +153,23 @@ function initMap() {
                     }
                 });
             }
-        });    
+			
+			console.log("maxDistance:", maxDistance);
+        });  
+
+		$('#pingps').prop('checked', true);   
+        $('#pingps').change(function() {
+            var checked = $(this).is(":checked");
+            pinGps = checked;
+			console.log("pinGps:", pinGps);
+        });
+		
+		$('#usegps').prop('checked', true);   
+        $('#usegps').change(function() {
+            var checked = $(this).is(":checked");			
+            useGps = checked;
+			console.log("useGps:", useGps);
+        }); 
     });
 
     var cMarkerId = 0;
@@ -176,12 +251,21 @@ function initMap() {
 
     var timeMarkers = {};
 
-    var map = new google.maps.Map(document.getElementById('map'), {
+    map = new google.maps.Map(document.getElementById('map'), {
         zoom: 18,
-        center: {lat: 0, lng: 0}
+        center: {lat: 0, lng: 0},
+		disableDoubleClickZoom: true
     });
 
     map.addListener('click', function(evt) { originLocation.lat = evt.latLng.lat(); originLocation.lng = evt.latLng.lng(); });
+	map.addListener('dblclick', function(evt) { 
+		showPosition({
+			coords: {
+				latitude: evt.latLng.lat(),
+				longitude: evt.latLng.lng()
+			}
+		});
+	});
 
     function pad(num, size) {
         var s = num+"";
@@ -189,8 +273,10 @@ function initMap() {
         return s;
     }
 
-    window.setInterval(function() {
-        var cDate = new Date();
+    window.setInterval(updateMarkerTimers, 1000);  
+
+	function updateMarkerTimers() {
+		var cDate = new Date();
 
         for(var i in timeMarkers) {
             (function(sid) {
@@ -212,8 +298,8 @@ function initMap() {
 
                 $("#mrk-" + sid).html("<span class='" + textClass + "'>" + mins + ":" + pad(secs, 2) + "</span>");                
             })(i);
-        }         
-    }, 1000);    
+        }
+	}
 
     function getLocation() {
         if (navigator.geolocation) {
@@ -223,9 +309,28 @@ function initMap() {
     
     var allMarkers = [];
     var allOverlays = [];
+    var gpsMarker = null;
 
     function showPosition(position) {
-        map.setCenter({lat: position.coords.latitude, lng: position.coords.longitude});
+        currentGps = {lat: position.coords.latitude, lng: position.coords.longitude};
+		
+		if(locationCircle != null)
+			locationCircle.setMap(null);
+	
+		locationCircle = new google.maps.Circle({
+			strokeColor: '#0088FF',
+			strokeOpacity: 0.5,
+			strokeWeight: 2,
+			fillColor: '#0088FF',
+			fillOpacity: 0.15,
+			map: map,
+			center: currentGps,
+			radius: 50
+		});
+		
+		if(pinGps)
+			map.setCenter(currentGps);
+		
         cMarkerId = 0;
 
         for(var i = 0; i < allMarkers.length; i++) {
@@ -240,6 +345,21 @@ function initMap() {
         allMarkers = [];
         allOverlays = [];
         timeMarkers = {};
+
+        if(gpsMarker != null)
+            gpsMarker.setMap(null);
+
+        if(maxDistance != -1) {
+            var gpsLatLng = {lat: position.coords.latitude, lng: position.coords.longitude};
+            gpsMarker = new google.maps.Marker({
+                position: gpsLatLng,
+                map: map,
+                icon: {
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: 3
+                }
+            });
+        }
 
         for(var i in spawns) {
             (function(sid) {    
@@ -296,23 +416,23 @@ function initMap() {
                     infowindow.open(map, marker);
                 });
             })(i);
-        }        
+        } 
+		updateMarkerTimers();
     }
 
     function getNearestMarkers() {
-        $.get("/gps.json", function(data) { 
-            if(maxDistance != -1) {
-                showPosition({
-                    coords: { 
-                        latitude: parseFloat(data.lat),
-                        longitude: parseFloat(data.lng)
-                    }
-                });
+        $.get("/gps.json", { "_": $.now() }, function(data) { 
+            if(maxDistance != -1 && useGps) {
+				navigator.geolocation.getCurrentPosition(function(location) {
+				    showPosition({
+						coords: location.coords
+					});
+				});                
             }
         }, "json"); 
     }
 
-    window.setInterval(getNearestMarkers, 60000);
+    window.setInterval(getNearestMarkers, 10000);
     window.setTimeout(getNearestMarkers, 3000);
 }
     </script>

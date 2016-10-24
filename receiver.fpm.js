@@ -22,6 +22,10 @@ var fpmReceiver = function(config) {
         '-H', "referer: https://fastpokemap.se/", 
         '--compressed'        
     ]);    
+    prcSec.on('close', function (code) {
+        prcSec.stdout.resume(); 
+        prcSec.kill();
+    });
 
     /**
      * Attempt a single spawn point fetch by hitting the fastpokemap API.
@@ -53,6 +57,8 @@ var fpmReceiver = function(config) {
 
         prc.on('close', function (code) {
             prc.stdout.resume(); 
+            prc.kill();
+
             var contents = "";
 
             try {       
@@ -91,7 +97,11 @@ var fpmReceiver = function(config) {
                 console.log(contents);
                 setTimeout(function() { fetch(lat, lng, callback, error, tries + 1); }, 0);
             } else {                
-                callback(filterSpawns(contents.result), tries);
+		if(contents.result.length == 0) {
+			console.log("0 results, try aain. (" + tries + " " + ((tries == 1) ? "try" : "tries") + ")...");
+			setTimeout(function() { fetch(lat, lng, callback, error, tries + 1); }, 0);
+		} else
+	                callback(filterSpawns(contents.result), tries);
             }            
         });
     }
